@@ -136,6 +136,29 @@ router.post('/uploadCsv', upload.any(), (req, res) => {
     })    
 });
 
+router.post('/uploadSessionsCsv', upload.any(), (req,res) => {
+    var csvData = [];
+    fs.createReadStream(__dirname + '/../uploads/' + req.body.userFilename).pipe(csv()).on("data", function(data) {
+        csvData.push(data);
+    })
+    .on("end", function(data) {
+        var idIndex = csvData[0].indexOf("_id");
+        var counter = 0;
+        var confTitle = req.body.confTitle;
+
+        Conference
+            .find({"title": confTitle})
+            .exec()
+            .then(function(result) {
+                var currentConf = result[0];
+                for (var i = 1; i < csvData.length; i++) {
+                    counter++;
+                    updateSessionFromImport(req, res, csvData, counter, idIndex, i, currentConf, confTitle);
+                }
+            })
+    })     
+})
+
 router.get('/getallconferences', (req, res) => {
     Conference
         .find({})
@@ -1020,6 +1043,132 @@ function updateSpeakerFromImport(req, res, csvData, counter, emailIndex, i) {
             Speaker
                 .update(
                     {"email": csvData[i][emailIndex]},
+                    {"$set": proObject})
+                .exec()
+                .then(function() {
+                    if (counter == csvData.length - 1) {
+                        res.status(200);
+                        res.end();
+                    }
+                });
+        })
+}
+
+function updateSessionFromImport(req, res, csvData, counter, idIndex, i, currentConf, confTitle) {
+    var sessionId = csvData[i][idIndex]; 
+    sessionId = sessionId.slice(1, -1);
+
+    Session
+        .findById(sessionId)
+        .exec()
+        .then(function(session) {
+            var proObject = session;
+            for (var j = 0; j < csvData[i].length; j++) {
+                var currentProperty = csvData[0][j];
+                if (currentProperty == "sessTags") {
+                    var tagsArray = csvData[i][j].split(",");
+                    // Necessary to remove white spaces.
+                    for (var item in tagsArray) {
+                        tagsArray[item] = tagsArray[item].trim();
+                    }
+
+                    for (var k = 0; k < proObject.tags.length; k++) {
+                        var tagFound = false;
+                        for (var tag in tagsArray) {
+                            if (proObject.tags[k].name == tagsArray[tag]) {
+                                proObject.tags[k].checked = true;
+                                tagFound = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!tagFound) {
+                            proObject.tags[k].checked = false;
+                        }
+                    }
+                } else if (currentProperty == "date" || currentProperty == "date 2") {
+                    if (currentProperty == "date") {
+                        var timeSlotIndex = csvData[0].indexOf("timeSlot");
+                        var roomIndex = csvData[0].indexOf("room");
+                    } else if (currentProperty == "date 2") {
+                        var timeSlotIndex = csvData[0].indexOf("timeSlot 2");
+                        var roomIndex = csvData[0].indexOf("room 2");
+                    }
+                    if (roomIndex == -1) {
+                        var roomToSave = "";
+                    } else {
+                        var roomToSave = csvData[i][roomIndex];
+                    }
+                    // To change scheduling, both date and timeSlot should be given.
+                    if (timeSlotIndex > -1 && csvData[i][timeSlotIndex] != "" && csvData[i][j] != "") {
+                        var date = csvData[i][j];
+                        var timeSlot = csvData[i][timeSlotIndex];
+                        date = date.split("/")
+                        for (var q = 0; q < 2; q++) {
+                            if (date[q].length == 1) {
+                                date[q] = "0" + date[q];
+                            }
+                        }
+                        var rearrangedDate = date[2] + "-" + date[0] + "-" + date[1];
+                        var timeSlot = timeSlot.split("-");
+
+                        for (var day in currentConf.days) {
+                            if (currentConf.days[day].date == rearrangedDate) {
+                                var scheduledDay = currentConf.days[day];
+                                for (var slot in scheduledDay.timeSlots) {
+                                    if (scheduledDay.timeSlots[slot].start == timeSlot[0]) {
+                                        var timeSlotId = scheduledDay.timeSlots[slot]._id; 
+                                        if (proObject.statusTimeLocation.length == 0) {
+                                            proObject.statusTimeLocation.push({
+                                                "room": roomToSave,
+                                                "part": "0",
+                                                "timeSlot": timeSlotId,
+                                                "conferenceTitle": confTitle
+                                            })
+                                        } else {
+                                            if (currentProperty == "date") {
+                                                proObject.statusTimeLocation[0].timeSlot = timeSlotId;
+                                                if (roomIndex > -1) {
+                                                    // updates exisiting room only if room entry is in the csv. We don't want to override saved room if room field is not in the csv.
+                                                    proObject.statusTimeLocation[0].room = roomToSave;
+                                                }
+                                            } else if (currentProperty == "date 2") {
+                                                if (proObject.statusTimeLocation.length == 2) {
+                                                    proObject.statusTimeLocation[1].timeSlot = timeSlotId;
+                                                    if (roomIndex > -1) {
+                                                        proObject.statusTimeLocation[1].room = roomToSave;
+                                                    }
+                                                } else if (proObject.statusTimeLocation.length == 1) {
+                                                    proObject.statusTimeLocation.push({
+                                                        "room": roomToSave,
+                                                        "part": "0",
+                                                        "timeSlot": timeSlotId,
+                                                        "conferenceTitle": confTitle
+                                                    })                                                                              
+                                                }
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (currentProperty == "timeSlot" || currentProperty == "timeSlot 2" || currentProperty == "room" || currentProperty == "room 2") {
+                    continue;
+                } else if (currentProperty.match("Speaker")) {
+                    continue;
+                } else {
+                    if (csvData[i][j] == "FALSE") {
+                        proObject[currentProperty] = false;
+                    } else {
+                        proObject[currentProperty] = csvData[i][j];
+                    }
+                }
+            }
+            Session
+                .findByIdAndUpdate(
+                    sessionId,
                     {"$set": proObject})
                 .exec()
                 .then(function() {
