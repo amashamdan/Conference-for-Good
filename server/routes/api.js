@@ -1158,6 +1158,14 @@ function updateSessionFromImport(req, res, csvData, counter, idIndex, i, current
                     continue;
                 } else if (currentProperty.match("Speaker")) {
                     continue;
+                } else if (currentProperty == "handouts") {
+                    if (csvData[i][j] == "no") {
+                        proObject["handouts"] = [];
+                    } else if (csvData[i][j] == "yes") {
+                        if (proObject["handouts"].length == 0) {
+                            proObject["handouts"].push("handout submitted");
+                        }
+                    }              
                 } else {
                     if (csvData[i][j] == "FALSE") {
                         proObject[currentProperty] = false;
